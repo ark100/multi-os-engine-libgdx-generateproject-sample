@@ -1,4 +1,3 @@
-import org.gradle.api.tasks.GradleBuild
 import java.util.regex.Pattern
 
 buildscript {
@@ -7,6 +6,9 @@ buildscript {
 	dependencies {
 	}
 }
+
+def genName    = 'appSample'
+def genPackage = 'com.example'
 
 /**
  * download ./gdx-setup.jar
@@ -24,18 +26,17 @@ task downloadGdxSetupJar(group: 'sample_detail'){
 }
 
 /**
- * generate ./libgdx
+ * generate ./${genName}
  */
 task generateLibGDXProject(group: 'sample_detail'){
 	dependsOn downloadGdxSetupJar
-	def libgdxDir = file('libgdx')
 	
-	def appName    = 'appSample'
-	def genPackage = 'com.example'
-	
+	def appName    = genName
+	def genProjDir = file(genName)
+
 	doLast {
-		if(!libgdxDir.exists()) {
-			libgdxDir.mkdir()
+		if(!genProjDir.exists()) {
+			genProjDir.mkdir()
 
 			def excludeModulesVal = 'Android;ios'
 			def excludeModulesKey = excludeModulesVal == '' ? '' : '--excludeModules'
@@ -53,7 +54,7 @@ task generateLibGDXProject(group: 'sample_detail'){
 			//     excludeModules ... the modules to exclude on the project generation separated by ';'. Optional
 			//     extensions ... the extensions to include in the project separated by ';'. Optional
 			exec {
-				workingDir libgdxDir
+				workingDir genProjDir
 				commandLine 'java', '-jar', file('gdx-setup.jar').absolutePath, '--dir', '.', '--name', appName, '--package', genPackage, '--mainClass', 'Main', excludeModulesKey, excludeModulesVal
 			}
 		}
@@ -61,14 +62,14 @@ task generateLibGDXProject(group: 'sample_detail'){
 }
 
 /**
- * fix ./libgdx/build.gradle, update moe plugin
+ * fix ./${genName}/build.gradle, update moe plugin
  */
 task fixMoePlugin(group: 'sample_detail'){
 	mustRunAfter generateLibGDXProject
 	//classpath 'org.multi-os-engine:moe-gradle:1.4.0'
 	//replace
 	//classpath 'org.multi-os-engine.community:moe-gradle:1.5.1'
-	def f = file('libgdx/build.gradle')
+	def f = file("${genName}/build.gradle")
 	def trg = 'org.multi-os-engine:moe-gradle:1.4.0'
 	def rep = 'org.multi-os-engine.community:moe-gradle:1.5.1'
 	doLast {
@@ -83,12 +84,12 @@ task fixMoePlugin(group: 'sample_detail'){
 }
 
 /**
- * fix ./libgdx/gradle.properties, append simulators id
+ * fix ./${genName}/gradle.properties, append simulators id
  */
 task autoSelectSimulatorUDID(group: 'sample_detail') {
 	mustRunAfter generateLibGDXProject
 
-	def pPath = 'libgdx/gradle.properties'
+	def pPath = "${genName}/gradle.properties"
 	def p = file(pPath)
 	doLast {
 		if(p.exists() && !p.text.contains('moe.launcher.simulators')){
@@ -134,12 +135,12 @@ task autoSelectSimulatorUDID(group: 'sample_detail') {
 }
 
 /**
- * fix ./libgdx/ios-moe/xcode/ios-moe.xcodeproj, by moeUpdateXcodeSettings task
+ * fix ./${genName}/ios-moe/xcode/ios-moe.xcodeproj, by moeUpdateXcodeSettings task
  */
 task fixXcodeproj(group: 'sample_detail', type: GradleBuild) {
 	mustRunAfter generateLibGDXProject, fixMoePlugin
-	buildFile = file('libgdx/ios-moe/build.gradle')
-	dir = file('libgdx/ios-moe')
+	buildFile = file("${genName}/ios-moe/build.gradle")
+	dir = file("${genName}/ios-moe")
 	tasks = ['moeUpdateXcodeSettings']
 	if(6 <= gradle.gradleVersion.split(Pattern.quote('.'))[0].toInteger() ){
 		buildName = "conf"
@@ -151,8 +152,8 @@ task fixXcodeproj(group: 'sample_detail', type: GradleBuild) {
  */
 task execMoeLaunch(group: 'sample_detail', type: GradleBuild) {
 	mustRunAfter generateLibGDXProject, fixMoePlugin, fixXcodeproj, autoSelectSimulatorUDID
-	buildFile = file('libgdx/ios-moe/build.gradle')
-	dir = file('libgdx/ios-moe')
+	buildFile = file("${genName}/ios-moe/build.gradle")
+	dir = file("${genName}/ios-moe")
 	tasks = ['moeLaunch']
 	if(6 <= gradle.gradleVersion.split(Pattern.quote('.'))[0].toInteger() ){
 		buildName = "launch"
