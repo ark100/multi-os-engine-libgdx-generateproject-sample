@@ -1,0 +1,181 @@
+import org.gradle.api.tasks.GradleBuild
+import java.util.regex.Pattern
+
+buildscript {
+	repositories {
+	}
+	dependencies {
+	}
+}
+
+/**
+ * download ./gdx-setup.jar
+ */
+task downloadGdxSetupJar(group: 'sample_detail'){
+	def src  = 'https://libgdx.badlogicgames.com/nightlies/dist/gdx-setup.jar'
+	def dest = file('gdx-setup.jar')
+	doLast {
+		if(!dest.exists()){
+			println("download src: ${src}")
+			println("download dest: ${dest}")
+			ant.get(src:src, dest:dest)
+		}
+	}
+}
+
+/**
+ * generate ./libgdx
+ */
+task generateLibGDXProject(group: 'sample_detail'){
+	dependsOn downloadGdxSetupJar
+	def libgdxDir = file('libgdx')
+	
+	def appName    = 'appSample'
+	def genPackage = 'com.example'
+	
+	doLast {
+		if(!libgdxDir.exists()) {
+			libgdxDir.mkdir()
+
+			def excludeModulesVal = 'Android;ios'
+			def excludeModulesKey = excludeModulesVal == '' ? '' : '--excludeModules'
+
+			// https://libgdx.badlogicgames.com/documentation/gettingstarted/Creating%20Projects.html#command-line
+			//
+			// command line:
+			//     java -jar gdx-setup.jar --dir dir-name --name app-name --package package --mainClass mainClass --sdkLocation SDKLocation [--excludeModules modules] [--extensions extensions]
+			// option:
+			//     dir ... the directory to write the project files to
+			//     name ... the name of the application
+			//     package ... the Java package name of the application
+			//     mainClass ... the name of your main ApplicationListener
+			//     sdkLocation ... the location of your android SDK. Uses ANDROID_HOME if not specified. Ignored if android module is excluded
+			//     excludeModules ... the modules to exclude on the project generation separated by ';'. Optional
+			//     extensions ... the extensions to include in the project separated by ';'. Optional
+			exec {
+				workingDir libgdxDir
+				commandLine 'java', '-jar', file('gdx-setup.jar').absolutePath, '--dir', '.', '--name', appName, '--package', genPackage, '--mainClass', 'Main', excludeModulesKey, excludeModulesVal
+			}
+		}
+	}
+}
+
+/**
+ * fix ./libgdx/build.gradle, update moe plugin
+ */
+task fixMoePlugin(group: 'sample_detail'){
+	mustRunAfter generateLibGDXProject
+	//classpath 'org.multi-os-engine:moe-gradle:1.4.0'
+	//replace
+	//classpath 'org.multi-os-engine.community:moe-gradle:1.5.1'
+	def f = file('libgdx/build.gradle')
+	def trg = 'org.multi-os-engine:moe-gradle:1.4.0'
+	def rep = 'org.multi-os-engine.community:moe-gradle:1.5.1'
+	doLast {
+		if(f.exists()) {
+			def txt  = f.text
+			def txtR = txt.replace(trg, rep)
+			if(txt != txtR){
+				f.text = txtR
+			}
+		}
+	}
+}
+
+/**
+ * fix ./libgdx/gradle.properties, append simulators id
+ */
+task autoSelectSimulatorUDID(group: 'sample_detail') {
+	mustRunAfter generateLibGDXProject
+
+	def pPath = 'libgdx/gradle.properties'
+	def p = file(pPath)
+	doLast {
+		if(p.exists() && !p.text.contains('moe.launcher.simulators')){
+			def simJsonFile = file('simulators.json')
+			simJsonFile.withOutputStream  { os ->
+				exec {
+					commandLine 'xcrun', 'simctl', 'list', '--json'
+					standardOutput = os
+				}
+			}
+
+			def sim = new groovy.json.JsonSlurper().parseText(simJsonFile.text)
+
+			def runtimeMap = [:]
+			sim.runtimes.each { rt ->
+				runtimeMap[rt.identifier] = rt
+			}
+
+			def treeDev = new TreeMap<String,Object>()
+			sim.devices.each { runtimeID, devList ->
+				String runtimeName = runtimeMap[runtimeID]?.name ?: ""
+				devList.each { et ->
+					if(et.isAvailable && runtimeName.startsWith('iOS ') ){
+						println("${et.udid} # ${runtimeName} - ${et.name} - ${et.state}")
+						treeDev["${et.state=='Booted'?0:1},${et.name.startsWith('iPhone')?0:1},${et.name},${et.udid}"] = [
+							name: "${runtimeName} - ${et.name}",
+							udid: et.udid
+						]
+					}
+				}
+			}
+
+			println()
+			treeDev.take(1).each { k,et ->
+				println("auto select:")
+				println("    # ${et.name}")
+				println("    moe.launcher.simulators=${et.udid}")
+				println("append to: ${pPath}")
+				p.append("\n# ${et.name}\nmoe.launcher.simulators=${et.udid}\n")
+			}
+		}
+	}
+}
+
+/**
+ * fix ./libgdx/ios-moe/xcode/ios-moe.xcodeproj, by moeUpdateXcodeSettings task
+ */
+task fixXcodeproj(group: 'sample_detail', type: GradleBuild) {
+	mustRunAfter generateLibGDXProject, fixMoePlugin
+	buildFile = file('libgdx/ios-moe/build.gradle')
+	dir = file('libgdx/ios-moe')
+	tasks = ['moeUpdateXcodeSettings']
+	if(6 <= gradle.gradleVersion.split(Pattern.quote('.'))[0].toInteger() ){
+		buildName = "conf"
+	}
+}
+
+/**
+ * launch
+ */
+task execMoeLaunch(group: 'sample_detail', type: GradleBuild) {
+	mustRunAfter generateLibGDXProject, fixMoePlugin, fixXcodeproj, autoSelectSimulatorUDID
+	buildFile = file('libgdx/ios-moe/build.gradle')
+	dir = file('libgdx/ios-moe')
+	tasks = ['moeLaunch']
+	if(6 <= gradle.gradleVersion.split(Pattern.quote('.'))[0].toInteger() ){
+		buildName = "launch"
+	}
+}
+
+/**
+ * generate
+ */
+task generateSample(group: 'sample') {
+	dependsOn generateLibGDXProject
+	dependsOn fixMoePlugin
+	dependsOn autoSelectSimulatorUDID
+	dependsOn fixXcodeproj
+}
+
+/**
+ * generate and launch
+ */
+task generateAndLaunchSample(group: 'sample') {
+	dependsOn generateLibGDXProject
+	dependsOn fixMoePlugin
+	dependsOn autoSelectSimulatorUDID
+	dependsOn fixXcodeproj
+	dependsOn execMoeLaunch
+}
